@@ -348,3 +348,142 @@ add_action('admin_notices', function () {
         </div>
     ';
 });
+
+
+
+
+/* -------------------------------------------------------
+ * Create custom 'staff' role with limited permissions
+ * ------------------------------------------------------- */
+function my_project_add_custom_roles() {
+    if ( get_role('staff') ) return;
+
+    add_role(
+        'staff',
+        'Staff',
+        array(
+            'read'         => true,
+            'edit_posts'   => true,
+            'upload_files' => true,
+        )
+    );
+}
+add_action('init', 'my_project_add_custom_roles');
+
+
+/* -------------------------------------------------------
+ * Restrict staff from sensitive wp-admin sections
+ * ------------------------------------------------------- */
+function my_project_limit_staff_admin_access() {
+
+    if ( ! is_admin() ) return;
+    if ( ! is_user_logged_in() ) return;
+
+    $user = wp_get_current_user();
+
+    // Only apply restrictions to STAFF
+    if ( ! in_array('staff', (array) $user->roles) ) {
+        return;
+    }
+
+    // Screens staff are NOT allowed to access
+    $restricted = array(
+        'users.php',
+        'user-new.php',
+        'plugins.php',
+        'plugin-install.php',
+        'tools.php',
+        'options-general.php',
+        'options-writing.php',
+        'options-reading.php',
+        'options-permalink.php',
+        'themes.php',
+        'customize.php',
+        'update-core.php'
+    );
+
+    $current_page = $GLOBALS['pagenow'];
+
+    if ( in_array( $current_page, $restricted, true ) ) {
+
+        // Log denied access
+        my_project_log_access('admin:' . $current_page, 'denied');
+
+        wp_die(
+            'Access denied. You do not have permission to view this page.',
+            'Access Denied',
+            array('response' => 403)
+        );
+    }
+}
+add_action('admin_init', 'my_project_limit_staff_admin_access');
+
+
+
+/* -------------------------------------------------------
+ * Log access attempts (works for both admin & staff)
+ * ------------------------------------------------------- */
+/* -------------------------------------------
+ * Log access attempts to sensitive resources
+ * ------------------------------------------- */
+function my_project_log_access( $resource, $status ) {
+    global $wpdb;
+
+    $user_id   = is_user_logged_in() ? get_current_user_id() : null;
+    $user_role = null;
+
+    // Get role correctly
+    if ( $user_id ) {
+        $user  = wp_get_current_user();
+        $roles = (array) $user->roles;
+        $user_role = isset($roles[0]) ? $roles[0] : null;
+    }
+
+    $ip        = $_SERVER['REMOTE_ADDR'] ?? null;
+    $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
+
+    // INSERT into wp_access_logs
+    $wpdb->insert(
+        $wpdb->prefix . 'access_logs',
+        array(
+            'user_id'    => $user_id,
+            'user_role'  => $user_role,
+            'resource'   => $resource,
+            'status'     => $status,
+            'ip_address' => $ip,
+            'user_agent' => $userAgent,
+        ),
+        array(
+            '%d',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+            '%s',
+        )
+    );
+
+    // DEBUG — Show any SQL error in the PHP error log
+    if ( ! empty( $wpdb->last_error ) ) {
+        error_log("SQL ERROR in my_project_log_access(): " . $wpdb->last_error);
+    }
+}
+
+
+/* -------------------------------------------------------
+ * Log ANY wp-admin screen visited by any logged-in user
+ * ------------------------------------------------------- */
+function my_project_log_admin_screen() {
+
+    if ( ! is_user_logged_in() || ! is_admin() )
+        return;
+
+    $screen = get_current_screen();
+    if ( ! $screen )
+        return;
+
+    // Log the full screen ID, e.g. "dashboard", "edit-post", "upload"
+    my_project_log_access('admin:' . $screen->id, 'allowed');
+}
+add_action('current_screen', 'my_project_log_admin_screen');
+
